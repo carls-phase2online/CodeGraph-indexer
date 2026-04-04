@@ -55,18 +55,20 @@ server.tool(
     console.error(`[MCP Server Log] Target analysis directory (absolute): ${absoluteAnalysisDir}`);
 
     // --- Construct the manual command string ---
+      const neo4jUrl      = process.env.NEO4J_URL      || 'bolt://localhost:7687';
+      const neo4jUser     = process.env.NEO4J_USERNAME  || 'neo4j';
+      const neo4jPassword = process.env.NEO4J_PASSWORD  || 'neo4j';
+      const neo4jDatabase = process.env.NEO4J_DATABASE  || 'neo4j';
       const commandString = [
         'node',
         `"${analyzerScriptPath}"`,
- // Quote path
         'analyze',
         `"${absoluteAnalysisDir}"`,
- // Quote path
         '--update-schema',
-        '--neo4j-url', 'bolt://localhost:7687',
-        '--neo4j-user', 'neo4j',
-        '--neo4j-password', 'test1234',
-        '--neo4j-database', 'codegraph'
+        '--neo4j-url',      neo4jUrl,
+        '--neo4j-user',     neo4jUser,
+        '--neo4j-password', neo4jPassword,
+        '--neo4j-database', neo4jDatabase
       ].join(' ');
 
       console.error(`[MCP Server Log] Constructed command: ${commandString}`);

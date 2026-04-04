@@ -4,6 +4,7 @@ import { createContextLogger } from '../utils/logger.js';
 import { AnalyzerService } from '../analyzer/analyzer-service.js'; // Assuming analyzer-service.ts will be created
 import { Neo4jClient } from '../database/neo4j-client.js';
 import { SchemaManager } from '../database/schema.js'; // Assuming schema.ts will be created
+import { parseCsproj } from '../analyzer/parsers/csproj-parser.js';
 import config from '../config/index.js';
 
 const logger = createContextLogger('AnalyzeCmd');
@@ -18,6 +19,10 @@ interface AnalyzeOptions {
     neo4jUser?: string;
     neo4jPassword?: string;
     neo4jDatabase?: string;
+    // Portable path + project node options
+    relativeTo?: string;
+    projectName?: string;
+    section?: string;
 }
 
 export function registerAnalyzeCommand(program: Command): void {
@@ -33,6 +38,9 @@ export function registerAnalyzeCommand(program: Command): void {
         .option('--neo4j-user <user>', 'Neo4j username')
         .option('--neo4j-password <password>', 'Neo4j password')
         .option('--neo4j-database <database>', 'Neo4j database name')
+        .option('--relative-to <basePath>', 'Store file paths relative to this directory (portable across machines)')
+        .option('--project-name <name>', 'Create a Project node linking all analyzed files')
+        .option('--section <section>', 'Section label for the Project node (e.g. Core, Apps, V3)')
         .action(async (directory: string, options: AnalyzeOptions) => {
             logger.info(`Received analyze command for directory: ${directory}`);
             // The directory argument received from the MCP server is already absolute.
@@ -43,6 +51,9 @@ export function registerAnalyzeCommand(program: Command): void {
                 extensions: options.extensions ? options.extensions.split(',').map(ext => ext.trim().startsWith('.') ? ext.trim() : `.${ext.trim()}`) : config.supportedExtensions,
                 ignorePatterns: config.ignorePatterns.concat(options.ignore ? options.ignore.split(',').map(p => p.trim()) : []),
             };
+
+            // Resolve optional base path for relative file storage
+            const basePath = options.relativeTo ? path.resolve(options.relativeTo) : undefined;
 
             logger.debug('Effective options:', finalOptions);
 
@@ -83,11 +94,102 @@ export function registerAnalyzeCommand(program: Command): void {
 
 
                 // 3. Run Analysis
-                // AnalyzerService now creates its own Neo4jClient
-                const analyzerService = new AnalyzerService();
+                // Pass CLI Neo4j overrides so AnalyzerService uses the same connection
+                const analyzerService = new AnalyzerService({
+                    uri: options.neo4jUrl,
+                    username: options.neo4jUser,
+                    password: options.neo4jPassword,
+                    database: options.neo4jDatabase,
+                });
                 logger.info(`Starting analysis of directory: ${absoluteDirPath}`);
+                // Extract CLI-supplied ignore patterns and pass to analyzer
+                const cliExtraIgnores = options.ignore
+                    ? options.ignore.split(',').map((p: string) => p.trim())
+                    : [];
                 // Use the simplified analyze method
-                await analyzerService.analyze(absoluteDirPath);
+                await analyzerService.analyze(absoluteDirPath, basePath, cliExtraIgnores);
+
+                // Create Project node if --project-name was supplied
+                if (options.projectName) {
+                    const relPath = basePath
+                        ? path.relative(basePath, absoluteDirPath).replace(/\\/g, '/')
+                        : path.basename(absoluteDirPath);
+                    const entityId = `Project:${relPath}`;
+                    const segment  = relPath + '/';
+
+                    logger.info(`Creating Project node: ${options.projectName} (${relPath})`);
+                    await neo4jClient.runTransaction(
+                        `MERGE (p:Project {entityId: $entityId})
+                         SET p.name = $name, p.section = $section,
+                             p.relPath = $relPath, p.createdAt = $createdAt`,
+                        {
+                            entityId,
+                            name: options.projectName,
+                            section: options.section ?? '',
+                            relPath,
+                            createdAt: new Date().toISOString(),
+                        },
+                        'WRITE',
+                        'CreateProjectNode'
+                    );
+                    await neo4jClient.runTransaction(
+                        `MATCH (f:File) WHERE f.filePath CONTAINS $segment
+                         MATCH (p:Project {entityId: $entityId})
+                         MERGE (f)-[:BELONGS_TO_PROJECT]->(p)`,
+                        { segment, entityId },
+                        'WRITE',
+                        'LinkProjectFiles'
+                    );
+                    logger.info(`Project node created and files linked: ${options.projectName}`);
+
+                    // --- Phase B: Parse .csproj for project/package dependencies ---
+                    const effectiveBasePath = basePath ?? absoluteDirPath;
+                    const csprojResult = await parseCsproj(absoluteDirPath, effectiveBasePath);
+
+                    if (csprojResult) {
+                        // REFERENCES_PROJECT: link this Project to all referenced projects
+                        if (csprojResult.projectRefs.length > 0) {
+                            await neo4jClient.runTransaction(
+                                `MATCH (source:Project {entityId: $sourceEntityId})
+                                 UNWIND $targets AS targetData
+                                 MERGE (target:Project {entityId: targetData.entityId})
+                                 ON CREATE SET target.relPath = targetData.relPath
+                                 MERGE (source)-[:REFERENCES_PROJECT]->(target)`,
+                                {
+                                    sourceEntityId: entityId,
+                                    targets: csprojResult.projectRefs.map(r => ({
+                                        entityId: r.entityId,
+                                        relPath: r.relPath,
+                                    })),
+                                },
+                                'WRITE',
+                                'CsprojProjectRefs'
+                            );
+                            logger.info(`Linked ${csprojResult.projectRefs.length} REFERENCES_PROJECT edges for ${options.projectName}`);
+                        }
+
+                        // REFERENCES_PACKAGE: link this Project to each NuGet PackageNode
+                        if (csprojResult.packageRefs.length > 0) {
+                            await neo4jClient.runTransaction(
+                                `MATCH (source:Project {entityId: $sourceEntityId})
+                                 UNWIND $packages AS pkg
+                                 MERGE (target:PackageNode {entityId: 'package:' + toLower(pkg.name)})
+                                 ON CREATE SET target.name = pkg.name
+                                 MERGE (source)-[r:REFERENCES_PACKAGE]->(target)
+                                 SET r.version = pkg.version,
+                                     r.sdkStyle = $sdkStyle`,
+                                {
+                                    sourceEntityId: entityId,
+                                    packages: csprojResult.packageRefs,
+                                    sdkStyle: csprojResult.sdkStyle,
+                                },
+                                'WRITE',
+                                'CsprojPackageRefs'
+                            );
+                            logger.info(`Linked ${csprojResult.packageRefs.length} REFERENCES_PACKAGE edges for ${options.projectName} (${csprojResult.sdkStyle ? 'SDK-style' : 'packages.config'})`);
+                        }
+                    }
+                }
 
                 logger.info('Analysis command finished successfully.');
 

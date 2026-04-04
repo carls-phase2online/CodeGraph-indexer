@@ -22,10 +22,10 @@ export class AnalyzerService {
     private storageManager: StorageManager;
     private neo4jClient: Neo4jClient;
 
-    constructor() {
+    constructor(neo4jConfigOverride?: { uri?: string; username?: string; password?: string; database?: string }) {
         this.parser = new Parser();
-        // Instantiate Neo4jClient without overrides to use config defaults
-        this.neo4jClient = new Neo4jClient();
+        // Accept optional Neo4j config overrides so CLI flags propagate through to storage
+        this.neo4jClient = new Neo4jClient(neo4jConfigOverride);
         // Pass the client instance to StorageManager
         this.storageManager = new StorageManager(this.neo4jClient);
         logger.info('AnalyzerService initialized.');
@@ -36,15 +36,15 @@ export class AnalyzerService {
      * Assumes database is cleared externally (e.g., via test setup).
      * @param directory - The root directory to analyze.
      */
-    async analyze(directory: string): Promise<void> {
+    async analyze(directory: string, basePath?: string, extraIgnorePatterns?: string[]): Promise<void> {
         logger.info(`Starting analysis for directory: ${directory}`);
         const absoluteDirectory = path.resolve(directory);
         let scanner: FileScanner;
 
         try {
             // Instantiate FileScanner here with directory and config
-            // Use config.supportedExtensions and config.ignorePatterns directly
-            scanner = new FileScanner(absoluteDirectory, config.supportedExtensions, config.ignorePatterns);
+            // Use config.supportedExtensions and pass extra ignore patterns (FileScanner will prepend config defaults)
+            scanner = new FileScanner(absoluteDirectory, config.supportedExtensions, extraIgnorePatterns ?? []);
 
             // 1. Scan Files
             logger.info('Scanning files...');
@@ -57,7 +57,7 @@ export class AnalyzerService {
 
             // 2. Parse Files (Pass 1)
             logger.info('Parsing files (Pass 1)...');
-            await this.parser.parseFiles(files);
+            await this.parser.parseFiles(files, basePath);
 
             // 3. Collect Pass 1 Results
             logger.info('Collecting Pass 1 results...');
@@ -103,12 +103,6 @@ export class AnalyzerService {
             // Save relationships batch by type
             for (const type in relationshipsByType) {
                  const batch = relationshipsByType[type];
-                 // --- TEMPORARY DEBUG LOG ---
-                 logger.debug(`[AnalyzerService] Processing relationship type: ${type}, Batch size: ${batch?.length ?? 0}`);
-                 if (type === 'HAS_METHOD') {
-                     logger.debug(`[AnalyzerService] Found HAS_METHOD batch. Calling saveRelationshipsBatch...`);
-                 }
-                 // --- END TEMPORARY DEBUG LOG ---
                  // Ensure batch is not undefined before passing (still good practice)
                  if (batch) {
                     await this.storageManager.saveRelationshipsBatch(type, batch);

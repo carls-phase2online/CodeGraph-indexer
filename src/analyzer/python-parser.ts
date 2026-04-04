@@ -34,7 +34,7 @@ export class PythonAstParser {
      * @returns A promise resolving to the path of the temporary result file.
      * @throws {ParserError} If the Python script fails or returns an error.
      */
-    async parseFile(file: FileInfo): Promise<string> {
+    async parseFile(file: FileInfo, basePath?: string): Promise<string> {
         logger.info(`[PythonAstParser] Starting Python parsing for: ${file.name}`);
         await ensureTempDir(); // Ensure temp directory exists
 
@@ -65,8 +65,12 @@ export class PythonAstParser {
             // For now, we assume the structure is compatible. We just need to add instance IDs.
 
             const instanceCounter: InstanceCounter = { count: 0 };
+            const rawFilePath = result.filePath;
+            const resolvedFilePath = basePath
+                ? path.relative(basePath, path.resolve(rawFilePath)).replace(/\\/g, '/')
+                : rawFilePath;
             const finalResult: SingleFileParseResult = {
-                filePath: result.filePath, // Use path from result
+                filePath: resolvedFilePath, // Use relative path when basePath provided
                 nodes: result.nodes.map(node => ({
                     ...node,
                     // Generate instance ID based on Python output location/name

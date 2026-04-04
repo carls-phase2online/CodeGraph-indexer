@@ -335,12 +335,14 @@ export class CSharpParser {
     /**
      * Parses a single C# file.
      */
-    async parseFile(file: FileInfo): Promise<string> {
+    async parseFile(file: FileInfo, basePath?: string): Promise<string> {
         logger.info(`[CSharpParser] Starting C# parsing for: ${file.name}`);
         await ensureTempDir();
         const tempFilePath = getTempFilePath(file.path);
         const absoluteFilePath = path.resolve(file.path);
-        const normalizedFilePath = absoluteFilePath.replace(/\\/g, '/');
+        const normalizedFilePath = basePath
+            ? path.relative(basePath, absoluteFilePath).replace(/\\/g, '/')
+            : absoluteFilePath.replace(/\\/g, '/');
 
         try {
             const fileContent = await fs.readFile(absoluteFilePath, 'utf-8');

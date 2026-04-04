@@ -47,7 +47,7 @@ export class Parser {
         this.tsProject = new Project({
             tsConfigFilePath: 'tsconfig.json',
             // Optionally skip adding source files automatically if we add them manually later
-            // skipAddingFilesFromTsConfig: true,
+            skipAddingFilesFromTsConfig: true,
         });
         this.pythonParser = new PythonAstParser();
         this.cppParser = new CCppParser();
@@ -63,12 +63,13 @@ export class Parser {
      * Parses a list of files, delegating to the appropriate language parser.
      * For TS/JS files, it adds them to the ts-morph project but doesn't generate separate JSON.
      * @param files - An array of FileInfo objects.
+     * @param basePath - Optional base path for computing portable relative file paths.
      * @returns A promise that resolves when all files have been parsed (Pass 1).
      */
-    async parseFiles(files: FileInfo[]): Promise<void> {
+    async parseFiles(files: FileInfo[], basePath?: string): Promise<void> {
         logger.info(`Starting Pass 1 processing for ${files.length} files...`);
         const parsePromises: Promise<string | null>[] = [];
-        // Store normalized paths of all files passed to this specific run
+        // Store absolute normalized paths of all files for TS/JS target matching
         const targetFilePaths = new Set(files.map(f => path.resolve(f.path).replace(/\\/g, '/')));
 
         const tsFilesToAdd: string[] = [];
@@ -78,22 +79,22 @@ export class Parser {
             try {
                 switch (file.extension) {
                     case '.py':
-                        parsePromise = this.pythonParser.parseFile(file);
+                        parsePromise = this.pythonParser.parseFile(file, basePath);
                         break;
                     case '.c':
                     case '.cpp':
                     case '.h':
                     case '.hpp':
-                        parsePromise = this.cppParser.parseFile(file);
+                        parsePromise = this.cppParser.parseFile(file, basePath);
                         break;
                     case '.java':
-                        parsePromise = this.javaParser.parseFile(file);
+                        parsePromise = this.javaParser.parseFile(file, basePath);
                         break;
                     case '.go':
-                        parsePromise = this.goParser.parseFile(file);
+                        parsePromise = this.goParser.parseFile(file, basePath);
                         break;
                     case '.cs':
-                        parsePromise = this.csharpParser.parseFile(file);
+                        parsePromise = this.csharpParser.parseFile(file, basePath);
                         break;
                     // case '.sql': // Temporarily disabled
                     //     parsePromise = this.sqlParser.parseFile(file);
@@ -133,11 +134,13 @@ export class Parser {
         }
 
         if (tsFilesToAdd.length > 0) {
-            this.tsProject.addSourceFilesAtPaths(tsFilesToAdd);
+            for (const fp of tsFilesToAdd) {
+                this.tsProject.addSourceFileAtPath(fp);
+            }
             logger.info(`Added ${tsFilesToAdd.length} TS/JS files to the ts-morph project.`);
             // Now parse the added TS/JS files
             // Pass the set of target file paths to filter which sourceFiles get fully parsed
-            await this._parseTsProjectFiles(targetFilePaths);
+            await this._parseTsProjectFiles(targetFilePaths, basePath);
         }
 
         await Promise.all(parsePromises);
@@ -280,21 +283,27 @@ export class Parser {
      * Parses all TypeScript/JavaScript SourceFile objects currently in the ts-morph project.
      * Only processes files whose paths are included in the targetFiles set.
      * @param targetFiles - A Set containing the normalized absolute paths of the files to be parsed.
+     * @param basePath - Optional base path for computing portable relative file paths.
      */
-    private async _parseTsProjectFiles(targetFiles: Set<string>): Promise<void> {
+    private async _parseTsProjectFiles(targetFiles: Set<string>, basePath?: string): Promise<void> {
         logger.info(`Starting TS/JS parsing. Project has ${this.tsProject.getSourceFiles().length} files. Filtering for ${targetFiles.size} target files.`);
         const now = new Date().toISOString();
         const instanceCounter = { count: 0 }; // Simple counter for instance IDs per run
 
         for (const sourceFile of this.tsProject.getSourceFiles()) {
-            const filePath = sourceFile.getFilePath().replace(/\\/g, '/'); // Normalize path
-            logger.debug(`Parsing TS/JS file: ${filePath}`);
+            const absoluteFilePath = sourceFile.getFilePath().replace(/\\/g, '/'); // Normalize path
+            logger.debug(`Parsing TS/JS file: ${absoluteFilePath}`);
 
             // Only process files that were part of the initial target scan for this run
-            if (!targetFiles.has(filePath)) {
-                // logger.trace(`Skipping non-target TS/JS file: ${filePath}`); // Optional: trace logging
+            if (!targetFiles.has(absoluteFilePath)) {
+                // logger.trace(`Skipping non-target TS/JS file: ${absoluteFilePath}`); // Optional: trace logging
                 continue;
             }
+
+            // Compute stored path: relative if basePath provided, otherwise absolute
+            const filePath = basePath
+                ? path.relative(basePath, absoluteFilePath).replace(/\\/g, '/')
+                : absoluteFilePath;
 
             // 1. Create FileNode
             const fileEntityId = generateEntityId('file', filePath);

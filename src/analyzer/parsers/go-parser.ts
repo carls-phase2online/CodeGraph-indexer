@@ -324,12 +324,14 @@ export class GoParser {
     /**
      * Parses a single Go file.
      */
-    async parseFile(file: FileInfo): Promise<string> {
+    async parseFile(file: FileInfo, basePath?: string): Promise<string> {
         logger.info(`[GoParser] Starting Go parsing for: ${file.name}`);
         await ensureTempDir();
         const tempFilePath = getTempFilePath(file.path);
         const absoluteFilePath = path.resolve(file.path);
-        const normalizedFilePath = absoluteFilePath.replace(/\\/g, '/');
+        const normalizedFilePath = basePath
+            ? path.relative(basePath, absoluteFilePath).replace(/\\/g, '/')
+            : absoluteFilePath.replace(/\\/g, '/');
 
         try { // Restore try...catch
             const fileContent = await fs.readFile(absoluteFilePath, 'utf-8');
