@@ -20,7 +20,9 @@ param(
 
     [string]$Neo4jUri  = "http://localhost:7474/db/codegraph/tx/commit",
     [string]$Neo4jUser = "neo4j",
-    [string]$Neo4jPass = "neo4j",
+    # SECURITY: default is Neo4j's factory password. Override with -Neo4jPass or
+    # $env:NEO4J_PASSWORD before running against any non-localhost instance.
+    [string]$Neo4jPass = $(if ($env:NEO4J_PASSWORD) { $env:NEO4J_PASSWORD } else { "neo4j" }),
 
     # Optional: only include rows whose Directory contains this substring
     # e.g. "\Src\" to skip test projects outside the production source tree

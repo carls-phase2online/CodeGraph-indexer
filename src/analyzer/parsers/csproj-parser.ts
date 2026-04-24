@@ -126,6 +126,13 @@ function extractProjectRefs(
             // The referenced "project" is the directory containing the .csproj
             const refDir = path.dirname(absRefPath);
             const relPath = path.relative(basePath, refDir).replace(/\\/g, '/');
+            // Refuse ProjectReferences that resolve outside basePath. A crafted .csproj
+            // with `Include="../../../etc/evil.csproj"` would otherwise land an
+            // entityId of `Project:../../../etc` in Neo4j, poisoning later queries.
+            if (relPath.startsWith('../') || path.isAbsolute(relPath)) {
+                logger.warn(`[CsprojParser] ProjectReference resolves outside basePath, skipping: ${includePath} -> ${relPath}`);
+                continue;
+            }
             refs.push({ relPath, entityId: `Project:${relPath}` });
         } catch (err) {
             logger.warn(`[CsprojParser] Could not resolve ProjectReference "${includePath}": ${(err as Error).message}`);

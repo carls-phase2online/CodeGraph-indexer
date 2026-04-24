@@ -21,7 +21,9 @@ param(
 
     [string]$Neo4jUri  = "http://localhost:7474/db/codegraph/tx/commit",
     [string]$Neo4jUser = "neo4j",
-    [string]$Neo4jPass = "neo4j",
+    # SECURITY: default is Neo4j's factory password. Override with -Neo4jPass or
+    # $env:NEO4J_PASSWORD before running against any non-localhost instance.
+    [string]$Neo4jPass = $(if ($env:NEO4J_PASSWORD) { $env:NEO4J_PASSWORD } else { "neo4j" }),
     [switch]$DryRun
 )
 
@@ -38,7 +40,12 @@ function Invoke-Cypher($query, $params) {
 }
 
 function Get-RelPath($absPath) {
-    return $absPath.Replace($BaseDir, '').TrimStart('\').Replace('\', '/')
+    # Use System.IO.Path.GetRelativePath instead of String.Replace($BaseDir, ''):
+    # String.Replace replaces all occurrences anywhere, not just a leading prefix, and
+    # on case-insensitive Windows filesystems a case mismatch between $BaseDir and the
+    # actual path silently fails — leaving an absolute path where a relative one is
+    # required, which would then become an invalid Neo4j entityId.
+    return [System.IO.Path]::GetRelativePath($BaseDir, $absPath).Replace('\', '/')
 }
 
 # ---- Discover .csproj files ---------------------------------------------------

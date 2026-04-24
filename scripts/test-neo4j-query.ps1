@@ -9,7 +9,9 @@ param(
     [string]$Uri      = "http://localhost:7474",
     [string]$Database = "codegraph",
     [string]$Username = "neo4j",
-    [string]$Password = "neo4j"
+    # SECURITY: default is Neo4j's factory password. Override with -Password or
+    # $env:NEO4J_PASSWORD before running against any non-localhost instance.
+    [string]$Password = $(if ($env:NEO4J_PASSWORD) { $env:NEO4J_PASSWORD } else { "neo4j" })
 )
 
 $endpoint = "$Uri/db/$Database/tx/commit"

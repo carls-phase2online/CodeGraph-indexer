@@ -59,6 +59,11 @@ server.tool(
       const neo4jUser     = process.env.NEO4J_USERNAME  || 'neo4j';
       const neo4jPassword = process.env.NEO4J_PASSWORD  || 'neo4j';
       const neo4jDatabase = process.env.NEO4J_DATABASE  || 'neo4j';
+      // Security: the Neo4j password is returned to the caller via the `env` field,
+      // not embedded in the command string. Callers that honour `requires_execute_command`
+      // must inject the `env` values into the child process's environment and leave
+      // --neo4j-password off the command line. The analyzer CLI reads NEO4J_PASSWORD
+      // from env as a fallback when --neo4j-password is absent.
       const commandString = [
         'node',
         `"${analyzerScriptPath}"`,
@@ -67,16 +72,18 @@ server.tool(
         '--update-schema',
         '--neo4j-url',      neo4jUrl,
         '--neo4j-user',     neo4jUser,
-        '--neo4j-password', neo4jPassword,
         '--neo4j-database', neo4jDatabase
       ].join(' ');
 
       console.error(`[MCP Server Log] Constructed command: ${commandString}`);
       console.error(`[MCP Server Log] Required CWD: ${projectRootDir}`);
-      // Return the command details as JSON within the text content
+      console.error('[MCP Server Log] Password supplied via env.NEO4J_PASSWORD (not logged)');
+      // Return the command details as JSON within the text content.
+      // `env` carries the secret; `command` does not. Callers must pass env through.
       const commandDetails = {
-           command: commandString,
-          cwd: projectRootDir
+          command: commandString,
+          cwd: projectRootDir,
+          env: { NEO4J_PASSWORD: neo4jPassword }
       };
       return {
           content: [{ type: "text", text: JSON.stringify(commandDetails) }],

@@ -12,7 +12,9 @@
 param(
     [string]$Neo4jUrl      = "http://localhost:7474/db/codegraph/tx/commit",
     [string]$Neo4jUser     = "neo4j",
-    [string]$Neo4jPassword = "neo4j",
+    # SECURITY: default is Neo4j's factory password. Override with -Neo4jPassword
+    # or $env:NEO4J_PASSWORD before running against any non-localhost instance.
+    [string]$Neo4jPassword = $(if ($env:NEO4J_PASSWORD) { $env:NEO4J_PASSWORD } else { "neo4j" }),
     [switch]$SkipExtends,
     [switch]$SkipImplements,
     [switch]$SkipUsedNamespaces

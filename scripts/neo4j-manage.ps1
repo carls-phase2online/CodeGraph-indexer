@@ -18,7 +18,9 @@ param(
     [string]$ContainerName = "codegraph-neo4j",
     [string]$Image         = "neo4j:2025.01.0",
     [string]$Database      = "codegraph",
-    [string]$Password      = "neo4j"
+    # SECURITY: default is Neo4j's factory password. Override with -Password or
+    # $env:NEO4J_PASSWORD before running against any non-localhost instance.
+    [string]$Password      = $(if ($env:NEO4J_PASSWORD) { $env:NEO4J_PASSWORD } else { "neo4j" })
 )
 
 $BOLT_URI = "bolt://localhost:7687"

@@ -45,9 +45,14 @@ export class PythonAstParser {
 
         const tempFilePath = getTempFilePath(file.path);
         const absoluteFilePath = path.resolve(file.path); // Ensure absolute path for the script
-        const normalizedFilePath = basePath
-            ? path.relative(basePath, absoluteFilePath).replace(/\\/g, '/')
-            : absoluteFilePath.replace(/\\/g, '/');
+        // Compute a repo-relative path when basePath is provided. If the file is NOT inside
+        // basePath (e.g., caller passed an unrelated --relative-to), fall back to the absolute
+        // path rather than storing a `../../../` traversal sequence in Neo4j node IDs.
+        const normalizedFilePath = (() => {
+            if (!basePath) return absoluteFilePath.replace(/\\/g, '/');
+            const rel = path.relative(basePath, absoluteFilePath).replace(/\\/g, '/');
+            return rel.startsWith('../') || path.isAbsolute(rel) ? absoluteFilePath.replace(/\\/g, '/') : rel;
+        })();
 
         try {
             const outputJson = await this.runPythonScript(absoluteFilePath);
@@ -62,8 +67,8 @@ export class PythonAstParser {
                  throw new ParserError(`Invalid JSON structure received from python_parser.py for ${file.path}`);
             }
 
-            // --- DEBUG LOG: Inspect raw result ---
-            logger.debug(`[PythonAstParser] Raw result from python_parser.py for ${file.name}: ${JSON.stringify(result, null, 2)}`);
+            // --- DEBUG LOG: count-only summary (avoid dumping the full AST to logs) ---
+            logger.debug(`[PythonAstParser] Parsed ${file.name}: ${result.nodes.length} nodes, ${result.relationships.length} rels`);
             // --- END DEBUG LOG ---
 
 
@@ -128,17 +133,33 @@ export class PythonAstParser {
             const childProcess = spawn(this.pythonExecutable, [scriptPath, filePath], { cwd: process.cwd() }); // Explicitly set CWD
  // Renamed variable
 
+            // Cap stdout/stderr growth so a pathological Python output (auto-generated
+            // code with thousands of symbols) can't exhaust Node.js heap. When exceeded,
+            // kill the child and reject — the file gets skipped rather than OOM'ing the run.
+            const MAX_OUTPUT_BYTES = 50 * 1024 * 1024; // 50 MB per file
             let stdoutData = '';
             let stderrData = '';
+            let killed = false;
+
+            const killIfOverBudget = (bytes: number, stream: 'stdout' | 'stderr') => {
+                if (killed || bytes <= MAX_OUTPUT_BYTES) return;
+                killed = true;
+                childProcess.kill();
+                reject(new ParserError(
+                    `Python script ${stream} for ${path.basename(filePath)} exceeded ${MAX_OUTPUT_BYTES} bytes; file skipped`,
+                ));
+            };
 
             childProcess.stdout.on('data', (data) => {
  // Use childProcess
                 stdoutData += data.toString();
+                killIfOverBudget(stdoutData.length, 'stdout');
             });
 
             childProcess.stderr.on('data', (data) => {
  // Use childProcess
                 stderrData += data.toString();
+                killIfOverBudget(stderrData.length, 'stderr');
             });
 
             childProcess.on('error', (err) => {
