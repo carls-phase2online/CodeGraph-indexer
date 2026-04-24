@@ -1,8 +1,13 @@
 // src/analyzer/python-parser.ts
 import { spawn } from 'child_process';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import fs from 'fs/promises';
 import { existsSync } from 'fs'; // Import synchronous existsSync
+
+// ESM equivalent of __dirname — resolves to dist/analyzer/ at runtime
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 import { createContextLogger } from '../utils/logger.js';
 import { ParserError, FileSystemError } from '../utils/errors.js';
 import { FileInfo } from '../scanner/file-scanner.js';
@@ -40,6 +45,9 @@ export class PythonAstParser {
 
         const tempFilePath = getTempFilePath(file.path);
         const absoluteFilePath = path.resolve(file.path); // Ensure absolute path for the script
+        const normalizedFilePath = basePath
+            ? path.relative(basePath, absoluteFilePath).replace(/\\/g, '/')
+            : absoluteFilePath.replace(/\\/g, '/');
 
         try {
             const outputJson = await this.runPythonScript(absoluteFilePath);
@@ -65,14 +73,11 @@ export class PythonAstParser {
             // For now, we assume the structure is compatible. We just need to add instance IDs.
 
             const instanceCounter: InstanceCounter = { count: 0 };
-            const rawFilePath = result.filePath;
-            const resolvedFilePath = basePath
-                ? path.relative(basePath, path.resolve(rawFilePath)).replace(/\\/g, '/')
-                : rawFilePath;
             const finalResult: SingleFileParseResult = {
-                filePath: resolvedFilePath, // Use relative path when basePath provided
+                filePath: normalizedFilePath, // Use normalized (possibly relative) path
                 nodes: result.nodes.map(node => ({
                     ...node,
+                    filePath: normalizedFilePath, // Override script-provided path with normalized version
                     // Generate instance ID based on Python output location/name
                     id: generateInstanceId(instanceCounter, node.kind.toLowerCase(), node.name, { line: node.startLine, column: node.startColumn }),
                     createdAt: new Date().toISOString(), // Add timestamp
@@ -117,7 +122,7 @@ export class PythonAstParser {
                 return reject(new ParserError(`Node.js cannot find the file before spawning Python: ${filePath}`));
             }
             // --- End Debug ---
-            const scriptPath = path.resolve(process.cwd(), 'python_parser.py'); // Assuming script is in root
+            const scriptPath = path.resolve(__dirname, 'parsers', 'python_parser.py');
             logger.debug(`[PythonAstParser] Executing: ${this.pythonExecutable} "${scriptPath}" "${filePath}"`);
 
             const childProcess = spawn(this.pythonExecutable, [scriptPath, filePath], { cwd: process.cwd() }); // Explicitly set CWD

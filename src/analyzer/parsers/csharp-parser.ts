@@ -26,6 +26,91 @@ function getNodeLocation(node: Parser.SyntaxNode): { startLine: number, endLine:
     };
 }
 
+/**
+ * Extract the simple (unqualified, non-generic) name from a base_list type node.
+ * Handles: identifier ("BaseClass"), generic_name ("BaseClass<T>"), qualified_name ("System.Web.Mvc.Controller")
+ */
+function getBaseSimpleName(node: Parser.SyntaxNode): string {
+    switch (node.type) {
+        case 'identifier':
+            return node.text;
+        case 'generic_name': {
+            // firstNamedChild is the identifier token (e.g. "TbbCrudController" from "TbbCrudController<Customer>")
+            const first = node.firstNamedChild;
+            if (first) return first.text || node.text.split('<').shift() || node.text;
+            return node.text.split('<').shift() || node.text;
+        }
+        case 'qualified_name': {
+            // Last named child is the rightmost identifier (e.g. "Controller" from "System.Web.Mvc.Controller")
+            const children = node.namedChildren;
+            const last = children[children.length - 1];
+            if (last) return last.text || node.text.split('.').pop() || node.text;
+            return node.text.split('.').pop() || node.text;
+        }
+        default: {
+            // Fallback: strip generics and take last dotted segment
+            const withoutGenerics = node.text.split('<').shift() || node.text;
+            return withoutGenerics.split('.').pop() || withoutGenerics;
+        }
+    }
+}
+
+/**
+ * Extract all attribute names from attribute_list children of a node.
+ * Returns simple names: [HttpGet] → "HttpGet", [ValidateAntiForgeryToken] → "ValidateAntiForgeryToken"
+ */
+function extractAttributeNames(node: Parser.SyntaxNode): string[] {
+    const names: string[] = [];
+    for (const child of node.namedChildren) {
+        if (child.type !== 'attribute_list') continue;
+        for (const attr of child.namedChildren) {
+            if (attr.type !== 'attribute') continue;
+            // Field 'name' on attribute node gives identifier/qualified_name/generic_name
+            const nameNode = attr.childForFieldName('name') ?? attr.firstNamedChild;
+            if (!nameNode) continue;
+            const simpleName = getBaseSimpleName(nameNode);
+            if (simpleName) names.push(simpleName);
+        }
+    }
+    return names;
+}
+
+/**
+ * Extract base class name and implemented interface names from a base_list.
+ * Uses C# naming convention: I[A-Z]... pattern = interface, otherwise = base class (first only).
+ */
+function extractBaseList(node: Parser.SyntaxNode, kind: 'CSharpClass' | 'CSharpInterface' | 'CSharpStruct'): {
+    baseClassName?: string;
+    implementedInterfaces: string[];
+} {
+    const baseList = node.namedChildren.find(c => c.type === 'base_list');
+    if (!baseList) return { implementedInterfaces: [] };
+
+    const result: { baseClassName?: string; implementedInterfaces: string[] } = { implementedInterfaces: [] };
+
+    for (const b of baseList.namedChildren) {
+        const simpleName = getBaseSimpleName(b);
+        if (!simpleName) continue;
+
+        if (kind === 'CSharpInterface') {
+            // Interface declarations: all base_list entries are extended interfaces
+            result.implementedInterfaces.push(simpleName);
+        } else {
+            // Class/Struct: convention I[A-Z]... = interface, otherwise = base class (single inheritance)
+            if (/^I[A-Z]/.test(simpleName)) {
+                result.implementedInterfaces.push(simpleName);
+            } else if (!result.baseClassName) {
+                result.baseClassName = simpleName;
+            } else {
+                // Unexpected second non-I base — treat as interface (defensive)
+                result.implementedInterfaces.push(simpleName);
+            }
+        }
+    }
+
+    return result;
+}
+
 // --- Tree-sitter Visitor ---
 class CSharpAstVisitor {
     public nodes: AstNode[] = [];
@@ -188,11 +273,24 @@ class CSharpAstVisitor {
         const qualifiedName = this.currentNamespace ? `${this.currentNamespace}.${name}` : name;
         const entityId = generateEntityId(kind.toLowerCase(), qualifiedName);
 
+        // --- Phase A: Extract inheritance / implementation info ---
+        const { baseClassName, implementedInterfaces } = extractBaseList(node, kind);
+
+        // --- Phase A: Extract C# attribute names ([HttpGet], [Route], etc.) ---
+        const attributeNames = extractAttributeNames(node);
+
         const containerNode: AstNode = {
             id: generateInstanceId(this.instanceCounter, kind.toLowerCase(), name, { line: location.startLine, column: location.startColumn }),
             entityId: entityId, kind: kind, name: name,
             filePath: this.filepath, language: 'C#', ...location, createdAt: this.now,
-            properties: { qualifiedName },
+            properties: {
+                qualifiedName,
+                // Inheritance (stored as top-level Neo4j properties after spread)
+                ...(baseClassName ? { baseClassName } : {}),
+                ...(implementedInterfaces.length > 0 ? { implementedInterfaces } : {}),
+                // Attributes (e.g. migration signals: WebMethod, OperationContract, HttpGet)
+                ...(attributeNames.length > 0 ? { attributeNames } : {}),
+            },
             parentId: this.currentNamespaceId ?? undefined
         };
         this.nodes.push(containerNode);
@@ -207,8 +305,6 @@ class CSharpAstVisitor {
             sourceId: parentNodeId, targetId: entityId,
             createdAt: this.now, weight: 9,
         });
-
-        // TODO: Add relationships for base types
     }
 
      private visitMethodDeclaration(node: Parser.SyntaxNode) {
@@ -219,13 +315,36 @@ class CSharpAstVisitor {
         const name = getNodeText(nameNode);
         if (!name) return;
 
+        // --- Phase A: Extract return type (field 'returns' in tree-sitter-c-sharp grammar) ---
+        const returnTypeNode = node.childForFieldName('returns');
+        const returnType = returnTypeNode ? getNodeText(returnTypeNode) : undefined;
+
+        // --- Phase A: Extract attribute names on this method ---
+        const attributeNames = extractAttributeNames(node);
+
+        // --- Phase A: Extract parameter types (for migration signal detection) ---
+        const paramList = node.childForFieldName('parameters');
+        const parameterTypes: string[] = [];
+        if (paramList) {
+            for (const param of paramList.namedChildren) {
+                if (param.type === 'parameter') {
+                    const typeNode = param.childForFieldName('type');
+                    if (typeNode) parameterTypes.push(typeNode.text);
+                }
+            }
+        }
+
         const methodEntityId = generateEntityId('csharpmethod', `${this.currentContainerId}.${name}`);
         const methodNode: CSharpMethodNode = {
             id: generateInstanceId(this.instanceCounter, 'csharpmethod', name, { line: location.startLine, column: location.startColumn }),
             entityId: methodEntityId, kind: 'CSharpMethod', name: name,
             filePath: this.filepath, language: 'C#', ...location, createdAt: this.now,
             parentId: this.currentContainerId,
-            // TODO: Extract parameters, return type, modifiers (public, static, async, etc.)
+            returnType: returnType,
+            properties: {
+                ...(attributeNames.length > 0 ? { attributeNames } : {}),
+                ...(parameterTypes.length > 0 ? { parameterTypes } : {}),
+            },
         };
         this.nodes.push(methodNode);
 
@@ -237,24 +356,17 @@ class CSharpAstVisitor {
             sourceId: this.currentContainerId, targetId: methodEntityId,
             createdAt: this.now, weight: 8,
         });
-        // TODO: Visit parameters
-        // TODO: Visit body for calls
     }
 
      private visitPropertyDeclaration(node: Parser.SyntaxNode) {
         if (!this.currentContainerId) return;
 
-        // Reverting static check for now
-        // const modifiersNode = node.children.find(c => c.type === 'modifiers');
-        // const isStatic = modifiersNode?.children.some(m => m.type === 'modifier' && m.text === 'static') ?? false;
-        // if (isStatic) {
-        //     return;
-        // }
-
         const location = getNodeLocation(node);
         const nameNode = node.childForFieldName('name');
         const name = getNodeText(nameNode);
         if (!name) return;
+
+        const attributeNames = extractAttributeNames(node);
 
         const propEntityId = generateEntityId('property', `${this.currentContainerId}.${name}`);
         const propNode: PropertyNode = {
@@ -262,14 +374,14 @@ class CSharpAstVisitor {
             entityId: propEntityId, kind: 'Property', name: name,
             filePath: this.filepath, language: 'C#', ...location, createdAt: this.now,
             parentId: this.currentContainerId,
-            // TODO: Extract type, modifiers, getter/setter info
+            ...(attributeNames.length > 0 ? { attributeNames } : {}),
         };
         this.nodes.push(propNode);
 
         // Relationship: Container -> HAS_PROPERTY -> Property
         const relEntityId = generateEntityId('has_property', `${this.currentContainerId}:${propEntityId}`);
         this.relationships.push({
-            id: generateInstanceId(this.instanceCounter, 'has_property', `${this.currentContainerId}:${propNode.id}`),
+            id: generateInstanceId(this.instanceCounter, 'has_property', `${this.currentContainerId}:${propEntityId}`),
             entityId: relEntityId, type: 'HAS_PROPERTY',
             sourceId: this.currentContainerId, targetId: propEntityId,
             createdAt: this.now, weight: 7,
@@ -279,14 +391,9 @@ class CSharpAstVisitor {
      private visitFieldDeclaration(node: Parser.SyntaxNode) {
         if (!this.currentContainerId) return;
 
-        // Reverting static check for now
-        // const modifiersNode = node.children.find(c => c.type === 'modifiers');
-        // const isStatic = modifiersNode?.children.some(m => m.type === 'modifier' && m.text === 'static') ?? false;
-        // if (isStatic) {
-        //      return;
-        // }
-
         const location = getNodeLocation(node);
+        // Attributes are declared once per field_declaration; propagate to each variable.
+        const attributeNames = extractAttributeNames(node);
         // Field declaration can have multiple variables (e.g., public int x, y;)
         const declarationNode = node.childForFieldName('declaration'); // Or similar based on grammar
         if (!declarationNode) return;
@@ -303,7 +410,7 @@ class CSharpAstVisitor {
                      entityId: fieldEntityId, kind: 'Field', name: name,
                      filePath: this.filepath, language: 'C#', ...location, createdAt: this.now,
                      parentId: this.currentContainerId,
-                     // TODO: Extract type, modifiers
+                     ...(attributeNames.length > 0 ? { attributeNames } : {}),
                  };
                  this.nodes.push(fieldNode);
 

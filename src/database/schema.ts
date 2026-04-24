@@ -17,7 +17,11 @@ export const NODE_LABELS = [
     'CSharpClass', 'CSharpInterface', 'CSharpStruct', 'CSharpMethod', 'Property', 'Field', 'NamespaceDeclaration', 'UsingDirective',
     'GoFunction', 'GoMethod', 'GoStruct', 'GoInterface', 'PackageClause', 'ImportSpec',
     // Added SQL labels
-    'SQLSchema', 'SQLTable', 'SQLView', 'SQLColumn', 'SQLSelectStatement', 'SQLInsertStatement', 'SQLUpdateStatement', 'SQLDeleteStatement', 'SQLFunction', 'SQLProcedure'
+    'SQLSchema', 'SQLTable', 'SQLView', 'SQLColumn', 'SQLSelectStatement', 'SQLInsertStatement', 'SQLUpdateStatement', 'SQLDeleteStatement', 'SQLFunction', 'SQLProcedure',
+    // Phase B: NuGet package nodes
+    'PackageNode',
+    // Cross-language project structure
+    'Project',
 ];
 
 // Define Relationship Types used in the graph
@@ -58,7 +62,16 @@ const BASE_RELATIONSHIP_TYPES = [
     'REFERENCES_TABLE',        // SQL: Statement/View/Function/Procedure -> SQLTable
     'REFERENCES_VIEW',         // SQL: Statement/View/Function/Procedure -> SQLView
     'CALLS_FUNCTION',          // SQL: Statement/Function/Procedure -> SQLFunction
-    'CALLS_PROCEDURE'          // SQL: Statement/Function/Procedure -> SQLProcedure
+    'CALLS_PROCEDURE',         // SQL: Statement/Function/Procedure -> SQLProcedure
+    // C# specific (Phase A/B additions)
+    'CSHARP_USING',            // C#: File -> UsingDirective
+    'DEFINES_CLASS',           // C#: NamespaceDeclaration/File -> CSharpClass
+    'DEFINES_INTERFACE',       // C#: NamespaceDeclaration/File -> CSharpInterface
+    'DEFINES_STRUCT',          // C#: NamespaceDeclaration/File -> CSharpStruct
+    // Project structure
+    'BELONGS_TO_PROJECT',      // File -> Project
+    'REFERENCES_PROJECT',      // Project -> Project (from .csproj ProjectReference)
+    'REFERENCES_PACKAGE',      // Project -> PackageNode (from .csproj PackageReference / packages.config)
 ];
 
 // Define relationship types that can cross file boundaries

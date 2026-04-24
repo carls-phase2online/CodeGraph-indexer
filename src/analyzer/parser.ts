@@ -134,9 +134,7 @@ export class Parser {
         }
 
         if (tsFilesToAdd.length > 0) {
-            for (const fp of tsFilesToAdd) {
-                this.tsProject.addSourceFileAtPath(fp);
-            }
+            this.tsProject.addSourceFilesAtPaths(tsFilesToAdd);
             logger.info(`Added ${tsFilesToAdd.length} TS/JS files to the ts-morph project.`);
             // Now parse the added TS/JS files
             // Pass the set of target file paths to filter which sourceFiles get fully parsed
