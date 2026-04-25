@@ -53,6 +53,27 @@ export class RelationshipResolver {
 
         logger.info('Starting Pass 2 relationship resolution...');
 
+        // Build a lookup from File-node `filePath` (relative, forward-slashed) to
+        // ts-morph SourceFile (which is keyed by absolute path internally).
+        // `project.getSourceFile(relativePath)` only matches absolute paths or
+        // basenames, so a direct lookup by relative path returns undefined and
+        // skips Pass 2 resolution for every file.
+        const sourceFilesByRelPath = new Map<string, SourceFile>();
+        for (const sf of project.getSourceFiles()) {
+            const abs = sf.getFilePath().replace(/\\/g, '/');
+            sourceFilesByRelPath.set(abs, sf);
+        }
+        const lookupSourceFile = (filePath: string): SourceFile | undefined => {
+            const norm = filePath.replace(/\\/g, '/');
+            // Direct hit (already absolute)
+            if (sourceFilesByRelPath.has(norm)) return sourceFilesByRelPath.get(norm);
+            // Suffix match — File-node `filePath` is relative to the scan root
+            for (const [abs, sf] of sourceFilesByRelPath) {
+                if (abs.endsWith('/' + norm)) return sf;
+            }
+            return undefined;
+        };
+
         // Iterate through all files represented by nodes from Pass 1
         const fileNodes = Array.from(this.nodeIndex.values()).filter(node => node.kind === 'File' || node.kind === 'PythonModule'); // Include PythonModule
 
@@ -63,7 +84,7 @@ export class RelationshipResolver {
 
             // Resolve TS/JS specific relationships using ts-morph SourceFile
             if (fileNode.language === 'TypeScript' || fileNode.language === 'JavaScript') {
-                sourceFile = project.getSourceFile(fileNode.filePath);
+                sourceFile = lookupSourceFile(fileNode.filePath);
                 if (sourceFile) {
                     resolveTsModules(sourceFile, fileNode, currentContext);
                     resolveTsInheritance(sourceFile, fileNode, currentContext);
@@ -79,7 +100,7 @@ export class RelationshipResolver {
             if (fileNode.language === 'C' || fileNode.language === 'C++') {
                  // We need a way to get the ts-morph SourceFile even for C/C++ if we want to use it
                  // For now, pass undefined or handle differently if ts-morph isn't used for C/C++ resolution
-                 const cSourceFile = project.getSourceFile(fileNode.filePath); // Attempt to get it anyway
+                 const cSourceFile = lookupSourceFile(fileNode.filePath); // Attempt to get it anyway
                  if (cSourceFile) {
                     resolveCIncludes(cSourceFile, fileNode, currentContext);
                  } else {
