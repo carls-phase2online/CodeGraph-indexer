@@ -97,14 +97,24 @@ export class StorageManager {
 
              const preparedBatch = batch.map(rel => this.prepareRelationshipProperties(rel));
 
-            // Use MATCH for nodes, assuming they were created in saveNodesBatch
+            // MATCH (not MERGE) source/target — saveNodesBatch ran first, so
+            // they should already exist. The earlier MERGE form created phantom
+            // unlabeled nodes when source/target was missing, then triggered
+            // "Unable to load NODE" failures from the per-label UNIQUE constraint
+            // on entityId clashing with the unlabeled placeholder node mid-tx.
+            //
+            // The label-presence guard (size(labels(...)) > 0) is defense in
+            // depth: if a phantom unlabeled node ever survives an earlier pass,
+            // we won't attach relationships to it. If a relationship's source
+            // or target is missing or unlabeled, the MATCH yields no rows and
+            // the relationship is silently dropped for this batch.
             const cypher = `
                 UNWIND $batch AS relData
-                 MERGE (source { entityId: relData.sourceId })
- // Use MERGE instead of MATCH
-                 MERGE (target { entityId: relData.targetId })
- // Use MERGE instead of MATCH
-                 MERGE (source)-[r:\`${relationshipType}\` { entityId: relData.entityId }]->(target) // Merge relationship on entityId
+                MATCH (source { entityId: relData.sourceId })
+                WHERE size(labels(source)) > 0
+                MATCH (target { entityId: relData.targetId })
+                WHERE size(labels(target)) > 0
+                MERGE (source)-[r:\`${relationshipType}\` { entityId: relData.entityId }]->(target)
                 ON CREATE SET r = relData.properties, r.type = relData.type, r.createdAt = relData.createdAt, r.weight = relData.weight
                 ON MATCH SET r += relData.properties
             `;

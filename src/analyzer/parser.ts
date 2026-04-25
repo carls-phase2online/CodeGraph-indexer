@@ -134,8 +134,22 @@ export class Parser {
         }
 
         if (tsFilesToAdd.length > 0) {
-            this.tsProject.addSourceFilesAtPaths(tsFilesToAdd);
-            logger.info(`Added ${tsFilesToAdd.length} TS/JS files to the ts-morph project.`);
+            // Use addSourceFileAtPath (singular) to treat each entry as a literal
+            // path. addSourceFilesAtPaths (plural) interprets entries as glob
+            // patterns, which silently drops files whose paths contain glob
+            // metacharacters — notably Next.js route group folders like
+            // `app/(protected)/...` and `app/(public)/...`. Per-file is slightly
+            // slower but correct.
+            let added = 0;
+            for (const filePath of tsFilesToAdd) {
+                try {
+                    this.tsProject.addSourceFileAtPath(filePath);
+                    added++;
+                } catch (e: any) {
+                    logger.warn(`Failed to add TS source file: ${filePath} — ${e.message}`);
+                }
+            }
+            logger.info(`Added ${added}/${tsFilesToAdd.length} TS/JS files to the ts-morph project.`);
             // Now parse the added TS/JS files
             // Pass the set of target file paths to filter which sourceFiles get fully parsed
             await this._parseTsProjectFiles(targetFilePaths, basePath);
