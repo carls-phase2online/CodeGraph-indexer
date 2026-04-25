@@ -53,22 +53,22 @@ export class RelationshipResolver {
 
         logger.info('Starting Pass 2 relationship resolution...');
 
-        // Build a lookup from File-node `filePath` (relative, forward-slashed) to
-        // ts-morph SourceFile (which is keyed by absolute path internally).
-        // `project.getSourceFile(relativePath)` only matches absolute paths or
-        // basenames, so a direct lookup by relative path returns undefined and
-        // skips Pass 2 resolution for every file.
-        const sourceFilesByRelPath = new Map<string, SourceFile>();
+        // Build a lookup from normalized absolute source-file paths to ts-morph
+        // SourceFile instances. File-node `filePath` values may be stored as
+        // relative paths, while `project.getSourceFile(...)` only matches
+        // absolute paths or basenames — so we keep an absolute-path lookup and
+        // suffix-match relative file-node paths when needed.
+        const sourceFilesByAbsPath = new Map<string, SourceFile>();
         for (const sf of project.getSourceFiles()) {
             const abs = sf.getFilePath().replace(/\\/g, '/');
-            sourceFilesByRelPath.set(abs, sf);
+            sourceFilesByAbsPath.set(abs, sf);
         }
         const lookupSourceFile = (filePath: string): SourceFile | undefined => {
             const norm = filePath.replace(/\\/g, '/');
             // Direct hit (already absolute)
-            if (sourceFilesByRelPath.has(norm)) return sourceFilesByRelPath.get(norm);
+            if (sourceFilesByAbsPath.has(norm)) return sourceFilesByAbsPath.get(norm);
             // Suffix match — File-node `filePath` is relative to the scan root
-            for (const [abs, sf] of sourceFilesByRelPath) {
+            for (const [abs, sf] of sourceFilesByAbsPath) {
                 if (abs.endsWith('/' + norm)) return sf;
             }
             return undefined;

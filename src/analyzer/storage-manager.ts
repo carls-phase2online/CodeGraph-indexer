@@ -102,12 +102,18 @@ export class StorageManager {
             // unlabeled nodes when source/target was missing, then triggered
             // "Unable to load NODE" failures from the per-label UNIQUE constraint
             // on entityId clashing with the unlabeled placeholder node mid-tx.
-            // If a relationship's source/target is missing, drop the relationship
-            // (logged as a warning at end via skipped count).
+            //
+            // The label-presence guard (size(labels(...)) > 0) is defense in
+            // depth: if a phantom unlabeled node ever survives an earlier pass,
+            // we won't attach relationships to it. If a relationship's source
+            // or target is missing or unlabeled, the MATCH yields no rows and
+            // the relationship is silently dropped for this batch.
             const cypher = `
                 UNWIND $batch AS relData
                 MATCH (source { entityId: relData.sourceId })
+                WHERE size(labels(source)) > 0
                 MATCH (target { entityId: relData.targetId })
+                WHERE size(labels(target)) > 0
                 MERGE (source)-[r:\`${relationshipType}\` { entityId: relData.entityId }]->(target)
                 ON CREATE SET r = relData.properties, r.type = relData.type, r.createdAt = relData.createdAt, r.weight = relData.weight
                 ON MATCH SET r += relData.properties
