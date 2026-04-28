@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- This reference escapes basePath via ../../.. — must be silently skipped -->
+    <ProjectReference Include="..\..\..\evil.csproj" />
+  </ItemGroup>
+</Project>
