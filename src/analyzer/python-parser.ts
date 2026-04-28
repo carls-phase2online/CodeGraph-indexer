@@ -12,7 +12,7 @@ import { createContextLogger } from '../utils/logger.js';
 import { ParserError, FileSystemError } from '../utils/errors.js';
 import { FileInfo } from '../scanner/file-scanner.js';
 import { AstNode, RelationshipInfo, SingleFileParseResult, InstanceCounter } from './types.js';
-import { ensureTempDir, getTempFilePath, generateInstanceId, generateEntityId } from './parser-utils.js'; // Reusing utils
+import { ensureTempDir, getTempFilePath, generateInstanceId, generateEntityId, relativizeFilePath } from './parser-utils.js'; // Reusing utils
 
 const logger = createContextLogger('PythonAstParser');
 
@@ -45,14 +45,9 @@ export class PythonAstParser {
 
         const tempFilePath = getTempFilePath(file.path);
         const absoluteFilePath = path.resolve(file.path); // Ensure absolute path for the script
-        // Compute a repo-relative path when basePath is provided. If the file is NOT inside
-        // basePath (e.g., caller passed an unrelated --relative-to), fall back to the absolute
-        // path rather than storing a `../../../` traversal sequence in Neo4j node IDs.
-        const normalizedFilePath = (() => {
-            if (!basePath) return absoluteFilePath.replace(/\\/g, '/');
-            const rel = path.relative(basePath, absoluteFilePath).replace(/\\/g, '/');
-            return rel.startsWith('../') || path.isAbsolute(rel) ? absoluteFilePath.replace(/\\/g, '/') : rel;
-        })();
+        // Compute a repo-relative path when basePath is provided. Falls back to absolute when
+        // the file is outside basePath — see relativizeFilePath JSDoc for full semantics.
+        const normalizedFilePath = relativizeFilePath(absoluteFilePath, basePath);
 
         try {
             const outputJson = await this.runPythonScript(absoluteFilePath);

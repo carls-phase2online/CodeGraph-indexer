@@ -129,8 +129,10 @@ function extractProjectRefs(
             // Refuse ProjectReferences that resolve outside basePath. A crafted .csproj
             // with `Include="../../../etc/evil.csproj"` would otherwise land an
             // entityId of `Project:../../../etc` in Neo4j, poisoning later queries.
-            if (relPath.startsWith('../') || path.isAbsolute(relPath)) {
-                logger.warn(`[CsprojParser] ProjectReference resolves outside basePath, skipping: ${includePath} -> ${relPath}`);
+            // Guard: first path segment being '..' covers '..', '../foo', '../../../bar' etc.
+            const firstSegment = relPath.split('/')[0];
+            if (firstSegment === '..' || relPath === '' || path.isAbsolute(relPath)) {
+                logger.warn(`[CsprojParser] ProjectReference resolves outside basePath, skipping: ${includePath} -> ${relPath || '(empty)'}`);
                 continue;
             }
             refs.push({ relPath, entityId: `Project:${relPath}` });

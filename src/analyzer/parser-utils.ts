@@ -105,6 +105,37 @@ export function generateEntityId(prefix: string, qualifiedName: string): string 
 }
 
 /**
+ * Converts an absolute file path to a repo-relative path when `basePath` is a strict ancestor
+ * of the file.
+ *
+ * @param filePath  - Absolute (or resolvable) path to the file.
+ * @param basePath  - Optional root directory to relativize against.
+ * @returns A forward-slashed relative path when `basePath` is a strict ancestor of `filePath`;
+ *          otherwise a forward-slashed absolute path.
+ *
+ * @remarks
+ * Falls back silently to the absolute path in all edge cases:
+ * - `basePath` is undefined or empty
+ * - `filePath` resolves to the same location as `basePath` (rel === '' or '.')
+ * - `basePath` is not an ancestor of `filePath` (rel starts with '../' or is absolute)
+ *
+ * Symlinks are resolved by the OS via `path.resolve`; a symlink inside `basePath` pointing
+ * outside it will pass the ancestor check. This is an OS-level trust boundary — callers that
+ * need symlink-safe behaviour must canonicalize paths before calling.
+ *
+ * Output always uses forward slashes regardless of platform.
+ * Inputs are not mutated.
+ */
+export function relativizeFilePath(filePath: string, basePath?: string): string {
+    const absolute = path.resolve(filePath).replace(/\\/g, '/');
+    if (!basePath) return absolute;
+    const rel = path.relative(path.resolve(basePath), path.resolve(filePath)).replace(/\\/g, '/');
+    if (rel === '' || rel === '.') return absolute;           // file equals basePath
+    if (rel.startsWith('../') || path.isAbsolute(rel)) return absolute; // escape → fallback
+    return rel;
+}
+
+/**
  * Generates a unique instance ID for a node or relationship within the context of a single file parse.
  * Primarily used for temporary identification during parsing.
  * @param instanceCounter - The counter object for the current file parse.

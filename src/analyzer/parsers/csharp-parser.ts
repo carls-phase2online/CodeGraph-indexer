@@ -9,7 +9,7 @@ import { createContextLogger } from '../../utils/logger.js';
 import { ParserError } from '../../utils/errors.js';
 import { FileInfo } from '../../scanner/file-scanner.js';
 import { AstNode, RelationshipInfo, SingleFileParseResult, InstanceCounter, NamespaceDeclarationNode, UsingDirectiveNode, CSharpClassNode, CSharpInterfaceNode, CSharpStructNode, CSharpMethodNode, PropertyNode, FieldNode } from '../types.js';
-import { ensureTempDir, getTempFilePath, generateInstanceId, generateEntityId } from '../parser-utils.js';
+import { ensureTempDir, getTempFilePath, generateInstanceId, generateEntityId, relativizeFilePath } from '../parser-utils.js';
 
 const logger = createContextLogger('CSharpParser');
 
@@ -452,9 +452,9 @@ export class CSharpParser {
         await ensureTempDir();
         const tempFilePath = getTempFilePath(file.path);
         const absoluteFilePath = path.resolve(file.path);
-        const normalizedFilePath = basePath
-            ? path.relative(basePath, absoluteFilePath).replace(/\\/g, '/')
-            : absoluteFilePath.replace(/\\/g, '/');
+        // Compute a repo-relative path when basePath is provided. Falls back to absolute when
+        // the file is outside basePath — see relativizeFilePath JSDoc for full semantics.
+        const normalizedFilePath = relativizeFilePath(absoluteFilePath, basePath);
 
         try {
             const fileContent = await fs.readFile(absoluteFilePath, 'utf-8');
