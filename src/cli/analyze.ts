@@ -111,11 +111,34 @@ export function registerAnalyzeCommand(program: Command): void {
 
                 // Create Project node if --project-name was supplied
                 if (options.projectName) {
-                    const relPath = basePath
-                        ? path.relative(basePath, absoluteDirPath).replace(/\\/g, '/')
-                        : path.basename(absoluteDirPath);
+                    // Compute relPath for the Project node identity. Validate that it is
+                    // well-formed: when --relative-to is supplied, an empty result means
+                    // basePath === absoluteDirPath (which would yield entityId="Project:"
+                    // and over-link every file in the graph), and a "../" result means
+                    // <directory> is outside basePath (which would land a poisoned entityId).
+                    let relPath: string;
+                    if (basePath) {
+                        relPath = path.relative(basePath, absoluteDirPath).replace(/\\/g, '/');
+                        if (!relPath || relPath.startsWith('../') || path.isAbsolute(relPath)) {
+                            throw new Error(
+                                `Invalid relPath '${relPath}' for project '${options.projectName}': ` +
+                                `--relative-to (${basePath}) must be a strict ancestor of <directory> (${absoluteDirPath}).`
+                            );
+                        }
+                    } else {
+                        relPath = path.basename(absoluteDirPath);
+                    }
                     const entityId = `Project:${relPath}`;
-                    const segment  = relPath + '/';
+
+                    // Compute the prefix that File.filePath values should start with.
+                    // Each parser stores filePath relative to basePath when --relative-to is
+                    // set, otherwise it stores the absolute (forward-slashed) path. Build the
+                    // matching prefix here so STARTS WITH is unambiguous and doesn't over-link
+                    // (a CONTAINS query would match any unrelated path that happens to embed
+                    // the project's basename anywhere in its segments).
+                    const filePathPrefix = basePath
+                        ? relPath + '/'
+                        : absoluteDirPath.replace(/\\/g, '/').replace(/\/?$/, '/');
 
                     logger.info(`Creating Project node: ${options.projectName} (${relPath})`);
                     await neo4jClient.runTransaction(
@@ -133,14 +156,14 @@ export function registerAnalyzeCommand(program: Command): void {
                         'CreateProjectNode'
                     );
                     await neo4jClient.runTransaction(
-                        `MATCH (f:File) WHERE f.filePath CONTAINS $segment
+                        `MATCH (f:File) WHERE f.filePath STARTS WITH $prefix
                          MATCH (p:Project {entityId: $entityId})
                          MERGE (f)-[:BELONGS_TO_PROJECT]->(p)`,
-                        { segment, entityId },
+                        { prefix: filePathPrefix, entityId },
                         'WRITE',
                         'LinkProjectFiles'
                     );
-                    logger.info(`Project node created and files linked: ${options.projectName}`);
+                    logger.info(`Project node created and files linked: ${options.projectName} (prefix: ${filePathPrefix})`);
 
                     // --- Phase B: Parse .csproj for project/package dependencies ---
                     const effectiveBasePath = basePath ?? absoluteDirPath;

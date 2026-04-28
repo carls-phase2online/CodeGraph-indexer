@@ -374,7 +374,9 @@ class CSharpAstVisitor {
             entityId: propEntityId, kind: 'Property', name: name,
             filePath: this.filepath, language: 'C#', ...location, createdAt: this.now,
             parentId: this.currentContainerId,
-            ...(attributeNames.length > 0 ? { attributeNames } : {}),
+            // Store attribute names under `properties` for consistency with class/method nodes
+            // and to remain inside AstNode's typed shape (no excess top-level field).
+            ...(attributeNames.length > 0 ? { properties: { attributeNames } } : {}),
         };
         this.nodes.push(propNode);
 
@@ -394,8 +396,10 @@ class CSharpAstVisitor {
         const location = getNodeLocation(node);
         // Attributes are declared once per field_declaration; propagate to each variable.
         const attributeNames = extractAttributeNames(node);
-        // Field declaration can have multiple variables (e.g., public int x, y;)
-        const declarationNode = node.childForFieldName('declaration'); // Or similar based on grammar
+        // tree-sitter-c-sharp models a field as `field_declaration > variable_declaration > variable_declarator+`,
+        // and `variable_declaration` is an UNNAMED child (no field-name). `childForFieldName('declaration')`
+        // returns null here, so we look it up by node type instead.
+        const declarationNode = node.namedChildren.find(c => c.type === 'variable_declaration');
         if (!declarationNode) return;
 
         for (const declarator of declarationNode.namedChildren) {
@@ -410,7 +414,8 @@ class CSharpAstVisitor {
                      entityId: fieldEntityId, kind: 'Field', name: name,
                      filePath: this.filepath, language: 'C#', ...location, createdAt: this.now,
                      parentId: this.currentContainerId,
-                     ...(attributeNames.length > 0 ? { attributeNames } : {}),
+                     // Store attribute names under `properties` for consistency with class/method nodes.
+                     ...(attributeNames.length > 0 ? { properties: { attributeNames } } : {}),
                  };
                  this.nodes.push(fieldNode);
 

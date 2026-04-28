@@ -58,7 +58,9 @@ server.tool(
       const neo4jUrl      = process.env.NEO4J_URL      || 'bolt://localhost:7687';
       const neo4jUser     = process.env.NEO4J_USERNAME  || 'neo4j';
       const neo4jPassword = process.env.NEO4J_PASSWORD  || 'neo4j';
-      const neo4jDatabase = process.env.NEO4J_DATABASE  || 'neo4j';
+      // Default matches src/config/index.ts so MCP-driven runs hit the same database
+      // as local CLI invocations when NEO4J_DATABASE is unset.
+      const neo4jDatabase = process.env.NEO4J_DATABASE  || 'codegraph';
       // Security: the Neo4j password is returned to the caller via the `env` field,
       // not embedded in the command string. Callers that honour `requires_execute_command`
       // must inject the `env` values into the child process's environment and leave

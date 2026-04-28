@@ -144,29 +144,37 @@ function extractProjectRefs(
 
 /**
  * Extract <PackageReference Include="..." Version="..."> from SDK-style .csproj.
- * Handles both inline-attribute and child-element Version forms.
+ * Handles both forms:
+ *   1. <PackageReference Include="Foo" Version="1.2.3" />  (Version as attribute)
+ *   2. <PackageReference Include="Foo"><Version>1.2.3</Version></PackageReference>  (child element)
  */
 function extractSdkPackageRefs(content: string): { packages: PackageRefInfo[]; found: boolean } {
     const packages: PackageRefInfo[] = [];
 
-    // Form 1: <PackageReference Include="Foo" Version="1.2.3" />
-    // (also handles attributes in reversed order)
-    const inlineRegex = /<PackageReference\s[^>]*>/gi;
+    // Match the entire PackageReference element — either self-closing or with a body.
+    // Capture group 1 is the body (undefined for self-closing).
+    // Using a non-greedy [\s\S]*? for body so adjacent elements don't get coalesced.
+    const elementRegex = /<PackageReference\b([^>]*?)(?:\/>|>([\s\S]*?)<\/PackageReference\s*>)/gi;
     let match: RegExpExecArray | null;
 
-    while ((match = inlineRegex.exec(content)) !== null) {
-        const element = match[0];
-        const nameMatch = /Include="([^"]+)"/i.exec(element);
-        const versionMatch = /Version="([^"]+)"/i.exec(element);
-        if (nameMatch) {
-            packages.push({
-                name: nameMatch[1] ?? '',
-                version: versionMatch ? (versionMatch[1] ?? '') : '',
-            });
-        }
+    while ((match = elementRegex.exec(content)) !== null) {
+        const attrs = match[1] ?? '';
+        const body  = match[2] ?? '';
+
+        const nameMatch = /\bInclude\s*=\s*"([^"]+)"/i.exec(attrs);
+        if (!nameMatch) continue;
+        const name = nameMatch[1] ?? '';
+
+        // Prefer Version="..." attribute; fall back to <Version>...</Version> child element.
+        const attrVersionMatch  = /\bVersion\s*=\s*"([^"]+)"/i.exec(attrs);
+        const childVersionMatch = body ? /<Version\s*>\s*([^<\s][^<]*?)\s*<\/Version\s*>/i.exec(body) : null;
+
+        const version = attrVersionMatch?.[1] ?? childVersionMatch?.[1] ?? '';
+
+        packages.push({ name, version });
     }
 
-    // Deduplicate by name (keep last occurrence which may have version from child element)
+    // Deduplicate by name (case-insensitive, keep last occurrence).
     const seen = new Map<string, PackageRefInfo>();
     for (const p of packages) {
         seen.set(p.name.toLowerCase(), p);
