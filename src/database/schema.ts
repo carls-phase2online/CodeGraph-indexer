@@ -17,7 +17,11 @@ export const NODE_LABELS = [
     'CSharpClass', 'CSharpInterface', 'CSharpStruct', 'CSharpMethod', 'Property', 'Field', 'NamespaceDeclaration', 'UsingDirective',
     'GoFunction', 'GoMethod', 'GoStruct', 'GoInterface', 'PackageClause', 'ImportSpec',
     // Added SQL labels
-    'SQLSchema', 'SQLTable', 'SQLView', 'SQLColumn', 'SQLSelectStatement', 'SQLInsertStatement', 'SQLUpdateStatement', 'SQLDeleteStatement', 'SQLFunction', 'SQLProcedure'
+    'SQLSchema', 'SQLTable', 'SQLView', 'SQLColumn', 'SQLSelectStatement', 'SQLInsertStatement', 'SQLUpdateStatement', 'SQLDeleteStatement', 'SQLFunction', 'SQLProcedure',
+    // Phase B: NuGet package nodes
+    'PackageNode',
+    // Cross-language project structure
+    'Project',
 ];
 
 // Define Relationship Types used in the graph
@@ -58,7 +62,16 @@ const BASE_RELATIONSHIP_TYPES = [
     'REFERENCES_TABLE',        // SQL: Statement/View/Function/Procedure -> SQLTable
     'REFERENCES_VIEW',         // SQL: Statement/View/Function/Procedure -> SQLView
     'CALLS_FUNCTION',          // SQL: Statement/Function/Procedure -> SQLFunction
-    'CALLS_PROCEDURE'          // SQL: Statement/Function/Procedure -> SQLProcedure
+    'CALLS_PROCEDURE',         // SQL: Statement/Function/Procedure -> SQLProcedure
+    // C# specific (Phase A/B additions)
+    'CSHARP_USING',            // C#: File -> UsingDirective
+    'DEFINES_CLASS',           // C#: NamespaceDeclaration/File -> CSharpClass
+    'DEFINES_INTERFACE',       // C#: NamespaceDeclaration/File -> CSharpInterface
+    'DEFINES_STRUCT',          // C#: NamespaceDeclaration/File -> CSharpStruct
+    // Project structure
+    'BELONGS_TO_PROJECT',      // File -> Project
+    'REFERENCES_PROJECT',      // Project -> Project (from .csproj ProjectReference)
+    'REFERENCES_PACKAGE',      // Project -> PackageNode (from .csproj PackageReference / packages.config)
 ];
 
 // Define relationship types that can cross file boundaries
@@ -79,6 +92,14 @@ const indexes = [
     ...NODE_LABELS.map(label => `CREATE INDEX ${label.toLowerCase()}_filepath_index IF NOT EXISTS FOR (n:${label}) ON (n.filePath)`),
     ...NODE_LABELS.map(label => `CREATE INDEX ${label.toLowerCase()}_name_index IF NOT EXISTS FOR (n:${label}) ON (n.name)`),
     `CREATE INDEX file_kind_index IF NOT EXISTS FOR (n:File) ON (n.kind)`, // Example
+    // Shared-label index backing StorageManager's node MERGE and relationship MATCHes.
+    // Those lookups are keyed on entityId alone and cannot name a kind label, so the
+    // per-label entityId constraints above are unusable to them — without this index
+    // the planner falls back to AllNodesScan and every write degrades O(batch × nodes).
+    // :CodeEntity is deliberately NOT in NODE_LABELS: the REMOVE clause in
+    // generateNodeLabelCypher() strips every NODE_LABELS entry on re-analysis, which
+    // would silently drop this label and revert the optimisation on the next scan.
+    `CREATE INDEX codeentity_entityid IF NOT EXISTS FOR (n:CodeEntity) ON (n.entityId)`,
 ];
 
 /**

@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node --input-type=module -e \"import { cpSync, mkdirSync } from 'node:fs'; mkdirSync('dist/analyzer/parsers', { recursive: true }); cpSync('src/analyzer/parsers/python_parser.py', 'dist/analyzer/parsers/python_parser.py');\"",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "test": "vitest run",

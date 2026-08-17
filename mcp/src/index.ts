@@ -55,26 +55,37 @@ server.tool(
     console.error(`[MCP Server Log] Target analysis directory (absolute): ${absoluteAnalysisDir}`);
 
     // --- Construct the manual command string ---
+      const neo4jUrl      = process.env.NEO4J_URL      || 'bolt://localhost:7687';
+      const neo4jUser     = process.env.NEO4J_USERNAME  || 'neo4j';
+      const neo4jPassword = process.env.NEO4J_PASSWORD  || 'neo4j';
+      // Default matches src/config/index.ts so MCP-driven runs hit the same database
+      // as local CLI invocations when NEO4J_DATABASE is unset.
+      const neo4jDatabase = process.env.NEO4J_DATABASE  || 'codegraph';
+      // Security: the Neo4j password is returned to the caller via the `env` field,
+      // not embedded in the command string. Callers that honour `requires_execute_command`
+      // must inject the `env` values into the child process's environment and leave
+      // --neo4j-password off the command line. The analyzer CLI reads NEO4J_PASSWORD
+      // from env as a fallback when --neo4j-password is absent.
       const commandString = [
         'node',
         `"${analyzerScriptPath}"`,
- // Quote path
         'analyze',
         `"${absoluteAnalysisDir}"`,
- // Quote path
         '--update-schema',
-        '--neo4j-url', 'bolt://localhost:7687',
-        '--neo4j-user', 'neo4j',
-        '--neo4j-password', 'test1234',
-        '--neo4j-database', 'codegraph'
+        '--neo4j-url',      neo4jUrl,
+        '--neo4j-user',     neo4jUser,
+        '--neo4j-database', neo4jDatabase
       ].join(' ');
 
       console.error(`[MCP Server Log] Constructed command: ${commandString}`);
       console.error(`[MCP Server Log] Required CWD: ${projectRootDir}`);
-      // Return the command details as JSON within the text content
+      console.error('[MCP Server Log] Password supplied via env.NEO4J_PASSWORD (not logged)');
+      // Return the command details as JSON within the text content.
+      // `env` carries the secret; `command` does not. Callers must pass env through.
       const commandDetails = {
-           command: commandString,
-          cwd: projectRootDir
+          command: commandString,
+          cwd: projectRootDir,
+          env: { NEO4J_PASSWORD: neo4jPassword }
       };
       return {
           content: [{ type: "text", text: JSON.stringify(commandDetails) }],

@@ -234,6 +234,8 @@ if __name__ == "__main__":
         print(json.dumps(result, indent=2)) # Output JSON to stdout
 
     except Exception as e:
-        # Use the normalized, absolute path in the error message
-        print(json.dumps({"error": f"Error parsing {filepath}: {str(e)}"}), file=sys.stderr)
+        # Only emit the file basename — the TypeScript caller already knows the
+        # absolute path from its own invocation context, so repeating it here only
+        # leaks internal paths into logs without adding information.
+        print(json.dumps({"error": f"Error parsing {os.path.basename(filepath)}: {str(e)}"}), file=sys.stderr)
         sys.exit(1)

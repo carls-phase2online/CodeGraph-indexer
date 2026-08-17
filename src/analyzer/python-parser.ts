@@ -1,13 +1,18 @@
 // src/analyzer/python-parser.ts
 import { spawn } from 'child_process';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import fs from 'fs/promises';
 import { existsSync } from 'fs'; // Import synchronous existsSync
+
+// ESM equivalent of __dirname — resolves to dist/analyzer/ at runtime
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 import { createContextLogger } from '../utils/logger.js';
 import { ParserError, FileSystemError } from '../utils/errors.js';
 import { FileInfo } from '../scanner/file-scanner.js';
 import { AstNode, RelationshipInfo, SingleFileParseResult, InstanceCounter } from './types.js';
-import { ensureTempDir, getTempFilePath, generateInstanceId, generateEntityId } from './parser-utils.js'; // Reusing utils
+import { ensureTempDir, getTempFilePath, generateInstanceId, generateEntityId, relativizeFilePath } from './parser-utils.js'; // Reusing utils
 
 const logger = createContextLogger('PythonAstParser');
 
@@ -34,12 +39,15 @@ export class PythonAstParser {
      * @returns A promise resolving to the path of the temporary result file.
      * @throws {ParserError} If the Python script fails or returns an error.
      */
-    async parseFile(file: FileInfo): Promise<string> {
+    async parseFile(file: FileInfo, basePath?: string): Promise<string> {
         logger.info(`[PythonAstParser] Starting Python parsing for: ${file.name}`);
         await ensureTempDir(); // Ensure temp directory exists
 
         const tempFilePath = getTempFilePath(file.path);
         const absoluteFilePath = path.resolve(file.path); // Ensure absolute path for the script
+        // Compute a repo-relative path when basePath is provided. Falls back to absolute when
+        // the file is outside basePath — see relativizeFilePath JSDoc for full semantics.
+        const normalizedFilePath = relativizeFilePath(absoluteFilePath, basePath);
 
         try {
             const outputJson = await this.runPythonScript(absoluteFilePath);
@@ -54,8 +62,8 @@ export class PythonAstParser {
                  throw new ParserError(`Invalid JSON structure received from python_parser.py for ${file.path}`);
             }
 
-            // --- DEBUG LOG: Inspect raw result ---
-            logger.debug(`[PythonAstParser] Raw result from python_parser.py for ${file.name}: ${JSON.stringify(result, null, 2)}`);
+            // --- DEBUG LOG: count-only summary (avoid dumping the full AST to logs) ---
+            logger.debug(`[PythonAstParser] Parsed ${file.name}: ${result.nodes.length} nodes, ${result.relationships.length} rels`);
             // --- END DEBUG LOG ---
 
 
@@ -66,9 +74,10 @@ export class PythonAstParser {
 
             const instanceCounter: InstanceCounter = { count: 0 };
             const finalResult: SingleFileParseResult = {
-                filePath: result.filePath, // Use path from result
+                filePath: normalizedFilePath, // Use normalized (possibly relative) path
                 nodes: result.nodes.map(node => ({
                     ...node,
+                    filePath: normalizedFilePath, // Override script-provided path with normalized version
                     // Generate instance ID based on Python output location/name
                     id: generateInstanceId(instanceCounter, node.kind.toLowerCase(), node.name, { line: node.startLine, column: node.startColumn }),
                     createdAt: new Date().toISOString(), // Add timestamp
@@ -113,23 +122,39 @@ export class PythonAstParser {
                 return reject(new ParserError(`Node.js cannot find the file before spawning Python: ${filePath}`));
             }
             // --- End Debug ---
-            const scriptPath = path.resolve(process.cwd(), 'python_parser.py'); // Assuming script is in root
+            const scriptPath = path.resolve(__dirname, 'parsers', 'python_parser.py');
             logger.debug(`[PythonAstParser] Executing: ${this.pythonExecutable} "${scriptPath}" "${filePath}"`);
 
             const childProcess = spawn(this.pythonExecutable, [scriptPath, filePath], { cwd: process.cwd() }); // Explicitly set CWD
  // Renamed variable
 
+            // Cap stdout/stderr growth so a pathological Python output (auto-generated
+            // code with thousands of symbols) can't exhaust Node.js heap. When exceeded,
+            // kill the child and reject — the file gets skipped rather than OOM'ing the run.
+            const MAX_OUTPUT_BYTES = 50 * 1024 * 1024; // 50 MB per file
             let stdoutData = '';
             let stderrData = '';
+            let killed = false;
+
+            const killIfOverBudget = (bytes: number, stream: 'stdout' | 'stderr') => {
+                if (killed || bytes <= MAX_OUTPUT_BYTES) return;
+                killed = true;
+                childProcess.kill();
+                reject(new ParserError(
+                    `Python script ${stream} for ${path.basename(filePath)} exceeded ${MAX_OUTPUT_BYTES} bytes; file skipped`,
+                ));
+            };
 
             childProcess.stdout.on('data', (data) => {
  // Use childProcess
                 stdoutData += data.toString();
+                killIfOverBudget(stdoutData.length, 'stdout');
             });
 
             childProcess.stderr.on('data', (data) => {
  // Use childProcess
                 stderrData += data.toString();
+                killIfOverBudget(stderrData.length, 'stderr');
             });
 
             childProcess.on('error', (err) => {

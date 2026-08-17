@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+  <!-- mismatched close tag below — no </PropertyGroup> -->
+  <ItemGroup>
+    <PackageReference Include="Foo" Version="1.0.0" />
+  </ItemGroup>
+</Project>

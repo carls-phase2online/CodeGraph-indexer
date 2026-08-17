@@ -53,7 +53,7 @@ export class StorageManager {
             // Simple UNWIND + MERGE + SET query
             const cypher = `
                 UNWIND $batch AS nodeData
-                MERGE (n { entityId: nodeData.entityId })
+                MERGE (n:CodeEntity { entityId: nodeData.entityId })
                 SET n = nodeData.properties
  // Revert to original SET
                 ${removeClause}
@@ -97,16 +97,34 @@ export class StorageManager {
 
              const preparedBatch = batch.map(rel => this.prepareRelationshipProperties(rel));
 
-            // Use MATCH for nodes, assuming they were created in saveNodesBatch
+            // MATCH (not MERGE) source/target — saveNodesBatch ran first, so
+            // they should already exist. The earlier MERGE form created phantom
+            // unlabeled nodes when source/target was missing, then triggered
+            // "Unable to load NODE" failures from the per-label UNIQUE constraint
+            // on entityId clashing with the unlabeled placeholder node mid-tx.
+            //
+            // The label-presence guard (size(labels(...)) > 0) is defense in
+            // depth: if a phantom unlabeled node ever survives an earlier pass,
+            // we won't attach relationships to it. If a relationship's source
+            // or target is missing or unlabeled, the MATCH yields no rows and
+            // the relationship is silently dropped for this batch.
+            // MERGE on the LOGICAL identity of the edge — (source, target, type) —
+            // NOT on relData.entityId. The entityId is an instance id
+            // (generateInstanceId → "...:Lline:Ccol:counter") that is NOT stable
+            // across scans, so keying the MERGE on it made every re-scan create a
+            // brand-new relationship → N duplicate edges of the same type between
+            // the same pair. A structural edge of a given type between two nodes is
+            // unique by definition, so MERGE on the pattern itself is idempotent.
+            // entityId is still stored as a property (for reference) on create.
             const cypher = `
                 UNWIND $batch AS relData
-                 MERGE (source { entityId: relData.sourceId })
- // Use MERGE instead of MATCH
-                 MERGE (target { entityId: relData.targetId })
- // Use MERGE instead of MATCH
-                 MERGE (source)-[r:\`${relationshipType}\` { entityId: relData.entityId }]->(target) // Merge relationship on entityId
-                ON CREATE SET r = relData.properties, r.type = relData.type, r.createdAt = relData.createdAt, r.weight = relData.weight
-                ON MATCH SET r += relData.properties
+                MATCH (source:CodeEntity { entityId: relData.sourceId })
+                WHERE size(labels(source)) > 0
+                MATCH (target:CodeEntity { entityId: relData.targetId })
+                WHERE size(labels(target)) > 0
+                MERGE (source)-[r:\`${relationshipType}\`]->(target)
+                ON CREATE SET r = relData.properties, r.type = relData.type, r.createdAt = relData.createdAt, r.weight = relData.weight, r.entityId = relData.entityId
+                ON MATCH SET r += relData.properties, r.type = relData.type, r.weight = relData.weight
             `;
 
             try {

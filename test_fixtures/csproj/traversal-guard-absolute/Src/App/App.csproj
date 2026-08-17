@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Absolute-path Include — resolves outside any relative basePath; must be silently skipped -->
+    <ProjectReference Include="C:\Windows\evil.csproj" />
+  </ItemGroup>
+</Project>
