@@ -302,15 +302,30 @@ export class Parser {
         const now = new Date().toISOString();
         const instanceCounter = { count: 0 }; // Simple counter for instance IDs per run
 
+        // Case-insensitive target lookup: ts-morph normalizes paths via realpath which
+        // can return the on-disk canonical case (macOS HFS+/APFS preserves case but is
+        // case-insensitive). Build a lowercased target set so cwd case differences in
+        // launcher scripts don't drop all files.
+        const targetFilesLower = new Set<string>();
+        for (const t of targetFiles) targetFilesLower.add(t.toLowerCase());
+
+        let _diagMatched = 0;
+        let _diagSkipped = 0;
+        const _diagSampleTargetPaths: string[] = Array.from(targetFiles).slice(0, 2);
+        const _diagSampleProjectPaths: string[] = [];
+
         for (const sourceFile of this.tsProject.getSourceFiles()) {
             const absoluteFilePath = sourceFile.getFilePath().replace(/\\/g, '/'); // Normalize path
+            if (_diagSampleProjectPaths.length < 2) _diagSampleProjectPaths.push(absoluteFilePath);
             logger.debug(`Parsing TS/JS file: ${absoluteFilePath}`);
 
-            // Only process files that were part of the initial target scan for this run
-            if (!targetFiles.has(absoluteFilePath)) {
-                // logger.trace(`Skipping non-target TS/JS file: ${absoluteFilePath}`); // Optional: trace logging
+            // Only process files that were part of the initial target scan for this run.
+            // Case-insensitive lookup — see targetFilesLower comment above.
+            if (!targetFilesLower.has(absoluteFilePath.toLowerCase())) {
+                _diagSkipped++;
                 continue;
             }
+            _diagMatched++;
 
             // Compute stored path: relative if basePath provided, otherwise absolute
             const filePath = basePath
@@ -382,6 +397,7 @@ export class Parser {
             }
         }
         logger.info(`Finished parsing ${targetFiles.size} target TS/JS files.`);
+        logger.info(`[DIAG] matched=${_diagMatched} skipped=${_diagSkipped} sample_target=${JSON.stringify(_diagSampleTargetPaths)} sample_project=${JSON.stringify(_diagSampleProjectPaths)}`);
     }
 }
 
