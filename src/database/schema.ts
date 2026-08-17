@@ -92,6 +92,14 @@ const indexes = [
     ...NODE_LABELS.map(label => `CREATE INDEX ${label.toLowerCase()}_filepath_index IF NOT EXISTS FOR (n:${label}) ON (n.filePath)`),
     ...NODE_LABELS.map(label => `CREATE INDEX ${label.toLowerCase()}_name_index IF NOT EXISTS FOR (n:${label}) ON (n.name)`),
     `CREATE INDEX file_kind_index IF NOT EXISTS FOR (n:File) ON (n.kind)`, // Example
+    // Shared-label index backing StorageManager's node MERGE and relationship MATCHes.
+    // Those lookups are keyed on entityId alone and cannot name a kind label, so the
+    // per-label entityId constraints above are unusable to them — without this index
+    // the planner falls back to AllNodesScan and every write degrades O(batch × nodes).
+    // :CodeEntity is deliberately NOT in NODE_LABELS: the REMOVE clause in
+    // generateNodeLabelCypher() strips every NODE_LABELS entry on re-analysis, which
+    // would silently drop this label and revert the optimisation on the next scan.
+    `CREATE INDEX codeentity_entityid IF NOT EXISTS FOR (n:CodeEntity) ON (n.entityId)`,
 ];
 
 /**

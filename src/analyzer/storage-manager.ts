@@ -53,7 +53,7 @@ export class StorageManager {
             // Simple UNWIND + MERGE + SET query
             const cypher = `
                 UNWIND $batch AS nodeData
-                MERGE (n { entityId: nodeData.entityId })
+                MERGE (n:CodeEntity { entityId: nodeData.entityId })
                 SET n = nodeData.properties
  // Revert to original SET
                 ${removeClause}
@@ -108,15 +108,23 @@ export class StorageManager {
             // we won't attach relationships to it. If a relationship's source
             // or target is missing or unlabeled, the MATCH yields no rows and
             // the relationship is silently dropped for this batch.
+            // MERGE on the LOGICAL identity of the edge — (source, target, type) —
+            // NOT on relData.entityId. The entityId is an instance id
+            // (generateInstanceId → "...:Lline:Ccol:counter") that is NOT stable
+            // across scans, so keying the MERGE on it made every re-scan create a
+            // brand-new relationship → N duplicate edges of the same type between
+            // the same pair. A structural edge of a given type between two nodes is
+            // unique by definition, so MERGE on the pattern itself is idempotent.
+            // entityId is still stored as a property (for reference) on create.
             const cypher = `
                 UNWIND $batch AS relData
-                MATCH (source { entityId: relData.sourceId })
+                MATCH (source:CodeEntity { entityId: relData.sourceId })
                 WHERE size(labels(source)) > 0
-                MATCH (target { entityId: relData.targetId })
+                MATCH (target:CodeEntity { entityId: relData.targetId })
                 WHERE size(labels(target)) > 0
-                MERGE (source)-[r:\`${relationshipType}\` { entityId: relData.entityId }]->(target)
-                ON CREATE SET r = relData.properties, r.type = relData.type, r.createdAt = relData.createdAt, r.weight = relData.weight
-                ON MATCH SET r += relData.properties
+                MERGE (source)-[r:\`${relationshipType}\`]->(target)
+                ON CREATE SET r = relData.properties, r.type = relData.type, r.createdAt = relData.createdAt, r.weight = relData.weight, r.entityId = relData.entityId
+                ON MATCH SET r += relData.properties, r.type = relData.type, r.weight = relData.weight
             `;
 
             try {
